@@ -464,17 +464,22 @@ jobs:
             Write-Host "OK: frontend index served ($($idx.RawContentLength) bytes)"
 
             # 3. Full stack: proxy through the Rust server to the Node.js
-            # sidecar (spawns `node dist/index.js` on demand).
+            # sidecar (spawns `node dist/index.js` on demand). NOTE: the
+            # proxy forwards the full path, so probe a route the sidecar
+            # actually serves under its `/api/sidecar` mount —
+            # `GET /sessions` (read-only, same call the frontend makes).
+            # `/api/sidecar/health` would 404 (sidecar serves `/health`
+            # unprefixed, which the proxy never addresses).
             $deadline = (Get-Date).AddSeconds(150)
             $sidecarOk = $false
             while ((Get-Date) -lt $deadline) {
               if ($proc.HasExited) { &$dumpLogs; throw "server died during sidecar check" }
               try {
-                $s = Invoke-WebRequest -Uri "http://localhost:$port/api/sidecar/health" -UseBasicParsing -TimeoutSec 10
+                $s = Invoke-WebRequest -Uri "http://localhost:$port/api/sidecar/sessions" -UseBasicParsing -TimeoutSec 10
                 if ($s.StatusCode -eq 200) { $sidecarOk = $true; break }
               } catch { Start-Sleep -Seconds 5 }
             }
-            if (-not $sidecarOk) { &$dumpLogs; throw "/api/sidecar/health never returned 200 (node sidecar failed)" }
+            if (-not $sidecarOk) { &$dumpLogs; throw "/api/sidecar/sessions never returned 200 (node sidecar failed)" }
             Write-Host "OK: node sidecar booted and proxied ($($s.Content.Trim()))"
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
