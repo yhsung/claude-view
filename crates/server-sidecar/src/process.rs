@@ -2,6 +2,7 @@
 //! Process utilities: port cleanup and sidecar directory discovery.
 
 use std::path::PathBuf;
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
 
 use super::error::SidecarError;
@@ -27,7 +28,12 @@ pub(crate) fn kill_port_holder(port: u16) {
             if !name.contains("node") {
                 continue;
             }
-            let cmd = proc_.cmd().join(" ").to_lowercase();
+            let cmd = proc_
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().to_lowercase())
+                .collect::<Vec<_>>()
+                .join(" ");
             if cmd.contains("sidecar") || cmd.contains(&port.to_string()) {
                 tracing::info!(pid = pid.as_u32(), port, "Killing stale node sidecar (Windows)");
                 let _ = claude_view_core::process::terminate_pid(pid.as_u32(), true);
