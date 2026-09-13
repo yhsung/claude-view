@@ -415,6 +415,71 @@ jobs:
             Write-Host "Not a tag push — skipping tag-vs-binary comparison"
           }
 
+      - name: Boot server and verify runtime
+        shell: pwsh
+        run: |
+          $port = 47991
+          $tmp = Join-Path $env:RUNNER_TEMP "cv-win-verify"
+          $exe = Join-Path $tmp "claude-view.exe"
+          $work = Join-Path $env:RUNNER_TEMP "cv-win-boot"
+          if (Test-Path $work) { Remove-Item -Recurse -Force $work }
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+
+          # Isolated data dir (fresh DB, no real ~/.claude touched for hooks —
+          # hooks are skipped entirely). Telemetry off.
+          $env:CLAUDE_VIEW_DATA_DIR = $work
+          $env:CLAUDE_VIEW_PORT = "$port"
+          $env:CLAUDE_VIEW_SKIP_HOOKS = "1"
+          $env:CLAUDE_VIEW_TELEMETRY = "0"
+
+          $outLog = Join-Path $work "server-out.log"
+          $errLog = Join-Path $work "server-err.log"
+          $proc = Start-Process -FilePath $exe -NoNewWindow -PassThru `
+            -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+          $dumpLogs = {
+            Write-Host "--- server stdout (tail) ---"
+            Get-Content $outLog -ErrorAction SilentlyContinue | Select-Object -Last 30
+            Write-Host "--- server stderr (tail) ---"
+            Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 30
+          }
+          try {
+            # 1. Wait for boot: /api/health must return 200.
+            $deadline = (Get-Date).AddSeconds(150)
+            $healthy = $false
+            while ((Get-Date) -lt $deadline) {
+              if ($proc.HasExited) { &$dumpLogs; throw "server exited early (code $($proc.ExitCode))" }
+              try {
+                $r = Invoke-WebRequest -Uri "http://localhost:$port/api/health" -UseBasicParsing -TimeoutSec 5
+                if ($r.StatusCode -eq 200) { $healthy = $true; break }
+              } catch { Start-Sleep -Seconds 3 }
+            }
+            if (-not $healthy) { &$dumpLogs; throw "/api/health never returned 200" }
+            Write-Host "OK: /api/health = 200"
+
+            # 2. Frontend must be served from the exe-sibling dist/.
+            $idx = Invoke-WebRequest -Uri "http://localhost:$port/" -UseBasicParsing -TimeoutSec 15
+            if ($idx.StatusCode -ne 200 -or $idx.RawContentLength -lt 100) {
+              &$dumpLogs; throw "frontend index not served correctly"
+            }
+            Write-Host "OK: frontend index served ($($idx.RawContentLength) bytes)"
+
+            # 3. Full stack: proxy through the Rust server to the Node.js
+            # sidecar (spawns `node dist/index.js` on demand).
+            $deadline = (Get-Date).AddSeconds(150)
+            $sidecarOk = $false
+            while ((Get-Date) -lt $deadline) {
+              if ($proc.HasExited) { &$dumpLogs; throw "server died during sidecar check" }
+              try {
+                $s = Invoke-WebRequest -Uri "http://localhost:$port/api/sidecar/health" -UseBasicParsing -TimeoutSec 10
+                if ($s.StatusCode -eq 200) { $sidecarOk = $true; break }
+              } catch { Start-Sleep -Seconds 5 }
+            }
+            if (-not $sidecarOk) { &$dumpLogs; throw "/api/sidecar/health never returned 200 (node sidecar failed)" }
+            Write-Host "OK: node sidecar booted and proxied ($($s.Content.Trim()))"
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
   release:
     name: Create Release
     needs: [verify, verify-windows]
