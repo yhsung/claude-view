@@ -95,9 +95,6 @@ rustls = { workspace = true }
 clap = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-nix = { version = "0.29", features = ["signal"] }
 crypto_box = "0.9"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
@@ -139,3 +136,7 @@ serial_test = "3"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+nix = { version = "0.29", features = ["signal"] }
