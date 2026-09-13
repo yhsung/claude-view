@@ -98,6 +98,10 @@ pub(crate) fn find_sidecar_dir() -> Result<PathBuf, SidecarError> {
     // 2. Binary-relative (npx distribution)
     if let Ok(exe) = std::env::current_exe() {
         if let Ok(canonical) = exe.canonicalize() {
+            // On Windows, canonicalize() returns UNC `\\?\D:\...` paths.
+            // Rust fs handles them, but Node.js mangles a UNC main-entry
+            // argument (resolves to `D:` → EISDIR crash loop), so strip it.
+            let canonical = strip_unc_prefix(canonical);
             if let Some(exe_dir) = canonical.parent() {
                 let bin_sidecar = exe_dir.join("sidecar");
                 if bin_sidecar.join("dist/index.js").exists() {
@@ -114,4 +118,53 @@ pub(crate) fn find_sidecar_dir() -> Result<PathBuf, SidecarError> {
     }
 
     Err(SidecarError::SidecarDirNotFound)
+}
+
+/// Strip the Windows UNC `\\?\` prefix from a canonicalized path.
+///
+/// Rust's `canonicalize()` returns e.g. `\\?\D:\app\claude-view.exe`.
+/// Rust fs APIs accept that, but child processes (Node.js entry-point
+/// resolution) mangle it — observed: `lstat 'D:'` EISDIR crash loop.
+/// No-op on non-Windows and on paths without the prefix.
+fn strip_unc_prefix(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        const UNC: &str = r"\\?\";
+        const UNC_UNC: &str = r"\\?\UNC\";
+        if let Some(s) = p.to_str() {
+            if let Some(rest) = s.strip_prefix(UNC_UNC) {
+                return PathBuf::from(format!(r"\\{rest}"));
+            }
+            if let Some(rest) = s.strip_prefix(UNC) {
+                return PathBuf::from(rest);
+            }
+        }
+        p
+    }
+    #[cfg(not(windows))]
+    {
+        p
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_unc_prefix_leaves_plain_paths_alone() {
+        let p = PathBuf::from("/usr/local/bin/claude-view");
+        assert_eq!(strip_unc_prefix(p.clone()), p);
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                strip_unc_prefix(PathBuf::from(r"\\?\D:\app\claude-view.exe")),
+                PathBuf::from(r"D:\app\claude-view.exe")
+            );
+            assert_eq!(
+                strip_unc_prefix(PathBuf::from(r"\\?\UNC\host\share\x.exe")),
+                PathBuf::from(r"\\host\share\x.exe")
+            );
+        }
+    }
 }
