@@ -425,6 +425,25 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          # Tag pushes carry the tag in ref_name. Manual dispatches run on a
+          # branch (tag pushes don't trigger workflows on some forks), so fall
+          # back to the version in npx-cli/package.json.
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=v$(node -p "require('./npx-cli/package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -440,6 +459,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
+          tag_name: ${{ steps.tag.outputs.name }}
           generate_release_notes: true
           files: artifacts/*
 
