@@ -380,9 +380,10 @@ mod tests {
     #[tokio::test]
     async fn test_open_rejects_unknown_ide() {
         let app = test_app().await;
+        let tmp = std::env::temp_dir().to_string_lossy().to_string();
         let req = serde_json::json!({
             "ide": "nonexistent",
-            "projectPath": "/tmp",
+            "projectPath": tmp,
         });
         let (status, body) = post_json(app, "/api/ide/open", &req).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -392,10 +393,11 @@ mod tests {
     #[tokio::test]
     async fn test_open_rejects_path_traversal() {
         let app = test_app().await;
-        // Use /tmp as the project dir (always exists on macOS/Linux).
+        // Use the OS temp dir as the project dir (always exists).
+        let tmp = std::env::temp_dir().to_string_lossy().to_string();
         let req = serde_json::json!({
             "ide": "testvscode",
-            "projectPath": "/tmp",
+            "projectPath": tmp,
             "filePath": "../etc/passwd",
         });
         let (status, body) = post_json(app, "/api/ide/open", &req).await;
