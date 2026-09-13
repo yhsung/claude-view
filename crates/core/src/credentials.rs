@@ -57,6 +57,9 @@ pub fn parse_credentials(bytes: &[u8]) -> Option<OAuthSection> {
 ///
 /// - macOS: `security find-generic-password` (Keychain Access)
 /// - Linux: `secret-tool lookup` (freedesktop.org Secret Service via D-Bus)
+/// - Windows: file fallback only for now (Credential Manager support planned;
+///   Claude Code writes `%USERPROFILE%/.claude/.credentials.json` which the
+///   file path above already covers).
 ///
 /// Returns raw JSON bytes. Handles both plain-text and hex-encoded
 /// responses from the `security` command on macOS.

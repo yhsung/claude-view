@@ -241,7 +241,7 @@ fn is_sync_event(event: &str) -> bool {
 // ── Path resolution ─────────────────────────────────────────────────────────
 
 fn settings_path() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".claude").join("settings.json"))
+    Some(claude_view_core::process::home_dir()?.join(".claude").join("settings.json"))
 }
 
 // ── Handler / matcher-group builders ────────────────────────────────────────
@@ -251,6 +251,13 @@ fn settings_path() -> Option<PathBuf> {
 // Omitting `matcher` matches all occurrences of the event.
 
 fn make_hook_handler(port: u16, event: &str) -> serde_json::Value {
+    #[cfg(windows)]
+    let command = format!(
+        "curl.exe -s -X POST http://localhost:{port}/api/live/hook \
+         -H \"Content-Type: application/json\" \
+         --data-binary @- > NUL 2>&1 {SENTINEL}"
+    );
+    #[cfg(not(windows))]
     let command = format!(
         "curl -s -X POST http://localhost:{port}/api/live/hook \
          -H 'Content-Type: application/json' \

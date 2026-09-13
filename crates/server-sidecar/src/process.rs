@@ -11,7 +11,33 @@ use super::error::SidecarError;
 /// Only kills processes whose command name contains "node" (sidecar runs
 /// via `node dist/index.js`). Leaves other apps alone.
 pub(crate) fn kill_port_holder(port: u16) {
-    let output = Command::new("lsof")
+    #[cfg(windows)]
+    {
+        // Windows: no lsof. Kill stale node.exe processes that look like
+        // the sidecar; the port bind retry confirms success.
+        use sysinfo::{ProcessesToUpdate, System};
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, false);
+        let my_pid = std::process::id();
+        for (pid, proc_) in sys.processes() {
+            if pid.as_u32() == my_pid {
+                continue;
+            }
+            let name = proc_.name().to_string_lossy().to_lowercase();
+            if !name.contains("node") {
+                continue;
+            }
+            let cmd = proc_.cmd().join(" ").to_lowercase();
+            if cmd.contains("sidecar") || cmd.contains(&port.to_string()) {
+                tracing::info!(pid = pid.as_u32(), port, "Killing stale node sidecar (Windows)");
+                let _ = claude_view_core::process::terminate_pid(pid.as_u32(), true);
+            }
+        }
+        return;
+    }
+    #[cfg(not(windows))]
+    {
+        let output = Command::new("lsof")
         .args(["-ti", &format!(":{port}")])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -43,6 +69,7 @@ pub(crate) fn kill_port_holder(port: u16) {
         } else {
             tracing::warn!(pid, port, "Non-node process on sidecar port, skipping");
         }
+    }
     }
 }
 

@@ -349,8 +349,9 @@ Why default-on for official builds? With thousands of anonymous installs and zer
 
 | Method | Command |
 |--------|---------|
-| **Shell** (recommended) | `curl -fsSL https://get.claudeview.ai/install.sh \| sh` |
-| **npx** | `npx claude-view` |
+| **Shell** (macOS/Linux) | `curl -fsSL https://get.claudeview.ai/install.sh \| sh` |
+| **PowerShell** (Windows) | `irm https://get.claudeview.ai/install.ps1 \| iex` |
+| **npx** (all platforms) | `npx claude-view` |
 | **Plugin** (auto-start) | `claude plugin marketplace add tombelieber/claude-view && claude plugin install claude-view` |
 
 The shell installer downloads a pre-built binary (~10 MB), installs to `~/.claude-view/bin`, and adds it to your PATH. Then just run `claude-view`.
@@ -507,8 +508,13 @@ git push origin main --tags    # triggers CI → builds → auto-publishes to np
 |----------|--------|
 | macOS (Apple Silicon) | Available |
 | macOS (Intel) | Available |
-| Linux (x64) | Planned |
-| Windows (x64) | Planned |
+| Linux (x64) | Available |
+| Linux (ARM64) | Available |
+| Windows (x64, Win10+) | Available (`npx claude-view` or `install.ps1`) |
+
+> Windows notes: hooks use `curl.exe`; the statusline wrapper (sh/jq) is
+> skipped on Windows; `tmux` sessions are not supported on native Windows
+> (use WSL2 for tmux). Data dir is `%USERPROFILE%\.claude-view`.
 
 ---
 

@@ -126,14 +126,18 @@ static KNOWN_IDES: &[IdeDefinition] = &[
 // Detection
 // ---------------------------------------------------------------------------
 
-/// Detect installed IDEs by running `which` for each known command.
+/// Detect installed IDEs by running `which` (Unix) / `where` (Windows).
 ///
 /// Returns a list of `(IdeInfo, resolved_command_path)` pairs.
 pub fn detect_installed_ides() -> Vec<(IdeInfo, String)> {
+    #[cfg(windows)]
+    let probe = "where";
+    #[cfg(not(windows))]
+    let probe = "which";
     let mut found = Vec::new();
     for def in KNOWN_IDES {
         for cmd in def.commands {
-            if let Ok(output) = std::process::Command::new("which").arg(cmd).output() {
+            if let Ok(output) = std::process::Command::new(probe).arg(cmd).output() {
                 if output.status.success() {
                     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if !path.is_empty() {

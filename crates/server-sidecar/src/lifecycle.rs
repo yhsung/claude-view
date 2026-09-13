@@ -177,9 +177,10 @@ impl SidecarManager {
 
     /// Gracefully shut down the sidecar: SIGTERM first, SIGKILL fallback.
     ///
-    /// Sends SIGTERM so Node.js cleanup handlers (`process.on('SIGTERM')`) can
-    /// run, then polls `try_wait()` for up to 3 seconds. Falls back to SIGKILL
-    /// only if the process refuses to exit.
+    /// Sends SIGTERM on Unix so Node.js cleanup handlers (`process.on('SIGTERM')`)
+    /// can run, then polls `try_wait()` for up to 3 seconds. Falls back to
+    /// force-kill only if the process refuses to exit.
+    /// On Windows there is no SIGTERM: terminates directly (TerminateProcess).
     ///
     /// NOTE: `child.wait()` / `child.try_wait()` are blocking calls.
     /// This is acceptable here because:
@@ -193,39 +194,42 @@ impl SidecarManager {
         };
         if let Some(ref mut child) = *guard {
             let pid = child.id();
-            tracing::info!(pid, "Shutting down sidecar (SIGTERM)");
+            tracing::info!(pid, "Shutting down sidecar");
 
-            // Send SIGTERM so Node.js cleanup handlers can run.
-            // SAFETY: pid comes from a Child we own; the process exists.
-            let term_result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-            if term_result != 0 {
-                tracing::warn!(pid, errno = term_result, "SIGTERM send failed");
-            }
+            #[cfg(unix)]
+            {
+                // Send SIGTERM so Node.js cleanup handlers can run.
+                // SAFETY: pid comes from a Child we own; the process exists.
+                let term_result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                if term_result != 0 {
+                    tracing::warn!(pid, errno = term_result, "SIGTERM send failed");
+                }
 
-            // Poll for graceful exit (up to 3s, 50ms intervals).
-            let deadline = std::time::Instant::now() + Duration::from_secs(3);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        tracing::info!(pid, ?status, "Sidecar exited gracefully");
-                        *guard = None;
-                        return;
-                    }
-                    Ok(None) => {
-                        if std::time::Instant::now() >= deadline {
-                            break; // timed out — fall through to SIGKILL
+                // Poll for graceful exit (up to 3s, 50ms intervals).
+                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            tracing::info!(pid, ?status, "Sidecar exited gracefully");
+                            *guard = None;
+                            return;
                         }
-                        std::thread::sleep(Duration::from_millis(50));
-                    }
-                    Err(e) => {
-                        tracing::warn!(pid, error = %e, "try_wait failed, falling back to SIGKILL");
-                        break;
+                        Ok(None) => {
+                            if std::time::Instant::now() >= deadline {
+                                break; // timed out — fall through to SIGKILL
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                        Err(e) => {
+                            tracing::warn!(pid, error = %e, "try_wait failed, falling back to SIGKILL");
+                            break;
+                        }
                     }
                 }
-            }
 
-            // Graceful shutdown timed out — force kill.
-            tracing::warn!(pid, "Sidecar did not exit within 3s, sending SIGKILL");
+                // Graceful shutdown timed out — force kill.
+                tracing::warn!(pid, "Sidecar did not exit within 3s, force-killing");
+            }
             let _ = child.kill();
             let _ = child.wait();
         }

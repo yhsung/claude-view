@@ -118,8 +118,8 @@ impl LocalLlmConfig {
 }
 
 fn config_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+    claude_view_core::process::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
         .join(".claude-view")
         .join("local-llm.json")
 }

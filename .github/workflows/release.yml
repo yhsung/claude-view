@@ -43,11 +43,10 @@ jobs:
             os: ubuntu-24.04-arm
             binary: claude-view
             artifact: claude-view-linux-arm64.tar.gz
-          # Windows build deferred
-          # - platform: win32-x64
-          #   os: windows-latest
-          #   binary: claude-view.exe
-          #   artifact: claude-view-win32-x64.zip
+          - platform: win32-x64
+            os: windows-latest
+            binary: claude-view.exe
+            artifact: claude-view-win32-x64.zip
 
     runs-on: ${{ matrix.os }}
 
@@ -110,9 +109,11 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
 
       - name: Install frontend dependencies
+        shell: bash
         run: bun install --frozen-lockfile
 
       - name: Build frontend
+        shell: bash
         run: cd apps/web && bun run build
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
@@ -120,12 +121,14 @@ jobs:
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
 
       - name: Build sidecar
+        shell: bash
         run: |
           cd sidecar
           npm install
           npm run build
 
       - name: Build Rust binary (dist profile)
+        shell: bash
         run: cargo build --profile dist -p claude-view-server --no-default-features --features dist
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
@@ -135,12 +138,14 @@ jobs:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
 
       - name: Stage sidecar
+        shell: bash
         run: |
           mkdir -p staging/sidecar
           cp -r sidecar/dist staging/sidecar/
 
       - name: Package (unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: |
           mkdir -p staging
           cp target/dist/${{ matrix.binary }} staging/
@@ -151,10 +156,26 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path staging
+          if (Test-Path "${{ matrix.artifact }}") { Remove-Item -Force "${{ matrix.artifact }}" }
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          if (-not (Test-Path "target\dist\${{ matrix.binary }}")) {
+            Write-Error "Missing binary: target\dist\${{ matrix.binary }}"
+            exit 1
+          }
           Copy-Item "target\dist\${{ matrix.binary }}" -Destination staging\
           Copy-Item -Recurse apps\web\dist staging\dist
           Compress-Archive -Path staging\* -DestinationPath ${{ matrix.artifact }}
+          Get-Item ${{ matrix.artifact }} | Format-List Name, Length
+
+      - name: Smoke test binary (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "staging\${{ matrix.binary }}" --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Windows binary failed --version check"
+            exit 1
+          }
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
@@ -201,7 +222,7 @@ jobs:
               fail=1
               continue
             fi
-            size=$(stat -c%s "$f")
+            size=$(wc -c < "$f")
             if [[ $size -lt 1000000 ]]; then
               echo "::error file=${f}::Artifact only $size bytes — build silently failed"
               fail=1
@@ -209,7 +230,33 @@ jobs:
               echo "OK: ${f} ($size bytes)"
             fi
           done
+          # Windows zip (same size gate, portable stat)
+          zf="artifacts/claude-view-win32-x64.zip"
+          if [[ ! -f "$zf" ]]; then
+            echo "::error file=${zf}::Missing Windows artifact"
+            fail=1
+          else
+            zsize=$(wc -c < "$zf")
+            if [[ $zsize -lt 1000000 ]]; then
+              echo "::error file=${zf}::Artifact only $zsize bytes — build silently failed"
+              fail=1
+            else
+              echo "OK: ${zf} ($zsize bytes)"
+            fi
+          fi
           [[ $fail -eq 0 ]] || exit 1
+
+      - name: Contract — windows zip structure matches npx-cli expectations
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          unzip -q "artifacts/claude-view-win32-x64.zip" -d "$tmp"
+          test -f "$tmp/claude-view.exe" || { echo "::error::win32 zip: missing claude-view.exe"; exit 1; }
+          test -d "$tmp/dist" || { echo "::error::win32 zip: missing dist/"; exit 1; }
+          test -d "$tmp/sidecar/dist" || { echo "::error::win32 zip: missing sidecar/dist/"; exit 1; }
+          echo "OK: windows zip structure"
+          rm -rf "$tmp"
 
       - name: Contract — tarball internal structure matches npx-cli expectations
         shell: bash
@@ -302,9 +349,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for tarball in artifacts/claude-view-*.tar.gz; do
-            name=$(basename "$tarball")
-            if gh attestation verify "$tarball" --owner "${GITHUB_REPOSITORY_OWNER}"; then
+          for artifact in artifacts/claude-view-*.tar.gz artifacts/claude-view-*.zip; do
+            name=$(basename "$artifact")
+            if gh attestation verify "$artifact" --owner "${GITHUB_REPOSITORY_OWNER}"; then
               echo "OK: attestation verified for ${name}"
             else
               echo "::error::Attestation verification failed for ${name}"
@@ -312,9 +359,65 @@ jobs:
             fi
           done
 
+  verify-windows:
+    name: Verify Windows artifact
+    needs: build
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: claude-view-win32-x64.zip
+          path: artifacts
+
+      - name: Extract and run --version
+        shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "cv-win-verify"
+          if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          # Prefer tar (Win10+) for reliable extraction; fall back to Expand-Archive.
+          try {
+            tar -xf "artifacts\claude-view-win32-x64.zip" -C $tmp
+          } catch {
+            Expand-Archive -Path "artifacts\claude-view-win32-x64.zip" -DestinationPath $tmp
+          }
+          $exe = Join-Path $tmp "claude-view.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "Missing claude-view.exe in Windows zip"
+            exit 1
+          }
+          if (-not (Test-Path (Join-Path $tmp "dist"))) {
+            Write-Error "Missing dist/ frontend in Windows zip"
+            exit 1
+          }
+          if (-not (Test-Path (Join-Path $tmp "sidecar\dist\index.js"))) {
+            Write-Error "Missing sidecar/dist/index.js in Windows zip"
+            exit 1
+          }
+          $out = & $exe --version | Select-Object -First 1
+          Write-Host "Binary reports version: $out"
+          if ($env:REF_TYPE -eq "tag") {
+            $expected = $env:REF_NAME.TrimStart("v")
+            if ($out -notmatch [regex]::Escape($expected)) {
+              Write-Error "Binary version '$out' != tag '$expected'"
+              exit 1
+            }
+            Write-Host "OK: binary version matches tag ($expected)"
+          } else {
+            Write-Host "Not a tag push — skipping tag-vs-binary comparison"
+          }
+
   release:
     name: Create Release
-    needs: verify
+    needs: [verify, verify-windows]
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry-run == false) }}
     runs-on: ubuntu-24.04
 
@@ -331,7 +434,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum claude-view-*.tar.gz > checksums.txt
+          sha256sum claude-view-*.tar.gz claude-view-*.zip > checksums.txt
           cat checksums.txt
 
       - name: Create GitHub Release
@@ -403,3 +506,31 @@ jobs:
             exit 1
           }
           echo "OK: npx install + --version matches ($version)"
+
+  smoke-test-windows:
+    name: Smoke test published npm (Windows)
+    needs: publish-npm
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+
+    permissions: {}
+
+    steps:
+      - name: Wait for npm registry propagation
+        shell: pwsh
+        run: Start-Sleep -Seconds 30
+
+      - name: Install and verify via npx
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = $env:REF_NAME.TrimStart("v")
+          Write-Host "Testing npx claude-view@$version --version"
+          $out = npx --yes "claude-view@$version" --version 2>&1 | Select-Object -First 1
+          Write-Host "Output: $out"
+          if ($out -notmatch [regex]::Escape($version)) {
+            Write-Error "npx claude-view@$version did not report version $version"
+            exit 1
+          }
+          Write-Host "OK: npx install + --version matches ($version)"

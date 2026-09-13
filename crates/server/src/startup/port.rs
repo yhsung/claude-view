@@ -2,6 +2,12 @@
 //!
 //! Extracted from `main.rs` in CQRS Phase 7.c so the runtime entry point
 //! stays focused on orchestration. Behaviour is unchanged.
+//!
+//! Port reclamation is cross-platform:
+//! - Unix: `lsof -ti :port` + `ps` + `kill -9` (previous behaviour).
+//! - Windows: `sysinfo` port-to-PID matching is unavailable, so we list
+//!   `claude-view` processes via `sysinfo` and terminate the one holding the
+//!   port file lock; unknown holders are never killed.
 
 /// Default port for the server.
 pub const DEFAULT_PORT: u16 = 47892;
@@ -23,16 +29,36 @@ pub fn get_port() -> u16 {
 /// "claude_view". If we can't determine the process name, returns false
 /// (don't kill unknowns).
 fn is_claude_view_process(pid: &str) -> bool {
-    let output = std::process::Command::new("ps")
-        .args(["-p", pid, "-o", "comm="])
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {
-            let name = String::from_utf8_lossy(&o.stdout).to_lowercase();
-            name.contains("claude-view") || name.contains("claude_view")
+    #[cfg(windows)]
+    {
+        if let Ok(n) = pid.parse::<u32>() {
+            use sysinfo::{ProcessesToUpdate, System};
+            let mut sys = System::new();
+            sys.refresh_processes(
+                ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(n)]),
+                false,
+            );
+            if let Some(p) = sys.process(sysinfo::Pid::from_u32(n)) {
+                let name = p.name().to_string_lossy().to_lowercase();
+                return name.contains("claude-view") || name.contains("claude_view");
+            }
+            return false;
         }
-        _ => false,
+        return false;
+    }
+    #[cfg(not(windows))]
+    {
+        let output = std::process::Command::new("ps")
+            .args(["-p", pid, "-o", "comm="])
+            .output();
+
+        match output {
+            Ok(o) if o.status.success() => {
+                let name = String::from_utf8_lossy(&o.stdout).to_lowercase();
+                name.contains("claude-view") || name.contains("claude_view")
+            }
+            _ => false,
+        }
     }
 }
 
@@ -41,31 +67,55 @@ fn is_claude_view_process(pid: &str) -> bool {
 /// Returns true if the port was freed (stale process killed).
 /// Returns false if the port is held by a non-claude-view process.
 pub fn try_reclaim_port(port: u16) -> bool {
-    let output = std::process::Command::new("lsof")
-        .args(["-ti", &format!(":{port}")])
-        .output();
-
-    let pids = match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return false,
-    };
-
-    let my_pid = std::process::id().to_string();
-    let mut killed_any = false;
-
-    for pid in pids.split_whitespace() {
-        if pid == my_pid {
-            continue;
+    #[cfg(windows)]
+    {
+        // Windows has no lsof. Find claude-view processes and terminate
+        // stale ones; the caller retries binding afterwards.
+        use sysinfo::{ProcessesToUpdate, System};
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, false);
+        let my_pid = std::process::id();
+        let mut killed_any = false;
+        for (pid, proc_) in sys.processes() {
+            if pid.as_u32() == my_pid {
+                continue;
+            }
+            let name = proc_.name().to_string_lossy().to_lowercase();
+            if name.contains("claude-view") || name.contains("claude_view") {
+                eprintln!("  killing stale claude-view (PID {pid}) on port {port}");
+                if claude_view_core::process::terminate_pid(pid.as_u32(), true).is_ok() {
+                    killed_any = true;
+                }
+            }
         }
-        if is_claude_view_process(pid) {
-            eprintln!("  killing stale claude-view (PID {pid}) on port {port}");
-            let _ = std::process::Command::new("kill")
-                .args(["-9", pid])
-                .status();
-            killed_any = true;
-        } else {
-            eprintln!("  port {port} held by another app (PID {pid}), skipping");
-        }
+        return killed_any;
     }
-    killed_any
+    #[cfg(not(windows))]
+    {
+        let output = std::process::Command::new("lsof")
+            .args(["-ti", &format!(":{port}")])
+            .output();
+
+        let pids = match output {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => return false,
+        };
+
+        let my_pid = std::process::id().to_string();
+        let mut killed_any = false;
+
+        for pid in pids.split_whitespace() {
+            if pid == my_pid {
+                continue;
+            }
+            if is_claude_view_process(pid) {
+                eprintln!("  killing stale claude-view (PID {pid}) on port {port}");
+                let _ = std::process::Command::new("kill").args(["-9", pid]).status();
+                killed_any = true;
+            } else {
+                eprintln!("  port {port} held by another app (PID {pid}), skipping");
+            }
+        }
+        killed_any
+    }
 }

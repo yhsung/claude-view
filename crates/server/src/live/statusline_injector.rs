@@ -79,9 +79,19 @@ session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 ///
 /// Saves the user's current statusLine command (if any) as
 /// `_claude_view_original_statusline` so it can be restored on cleanup.
-/// Writes the wrapper script to ~/.claude-view/statusline-wrapper.sh.
+/// Writes the wrapper script to ~/.claude-view/statusline-wrapper.sh
+/// (Unix) or statusline-wrapper.cmd (Windows).
 /// Called at server startup alongside hook_registrar::register().
 pub fn register(port: u16) {
+    #[cfg(windows)]
+    {
+        tracing::warn!(
+            "statusline_injector: statusline wrapper not supported on Windows yet \
+             (requires sh/jq); live monitor still works via hooks"
+        );
+        let _ = port;
+        return;
+    }
     let Some(settings_path) = settings_path() else {
         tracing::warn!("statusline_injector: could not determine home directory");
         return;

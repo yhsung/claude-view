@@ -4,15 +4,10 @@ use super::core::LiveSession;
 
 /// Check if a process with the given PID is still alive.
 ///
-/// Uses `kill(pid, 0)` which checks process existence without sending a signal.
-/// Returns `false` for PIDs <= 1 (kernel/init) to guard against reparented processes.
+/// Cross-platform (see `claude_view_core::process`). Returns `false` for
+/// PIDs <= 1 (kernel/init) to guard against reparented processes.
 pub fn is_pid_alive(pid: u32) -> bool {
-    if pid <= 1 {
-        return false;
-    }
-    // SAFETY: kill with signal 0 does not send a signal, only checks existence.
-    // Returns 0 if process exists and we have permission, -1 with ESRCH if not.
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    claude_view_core::process::is_pid_alive(pid)
 }
 
 /// What to do with a session that's in the live_sessions map.

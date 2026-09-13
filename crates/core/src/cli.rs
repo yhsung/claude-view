@@ -68,6 +68,15 @@ impl ClaudeCliStatus {
         "/usr/bin/claude",       // system package (FHS)
     ];
 
+    /// Windows-known install locations (checked only on Windows).
+    #[cfg(windows)]
+    pub(crate) const KNOWN_CLI_PATHS_WINDOWS: &[&str] = &[
+        "AppData\\Local\\Programs\\claude\\claude.exe",
+        "AppData\\Roaming\\npm\\claude.cmd",
+        "AppData\\Roaming\\npm\\claude.exe",
+        "scoop\\shims\\claude.exe",
+    ];
+
     /// Detect Claude CLI installation and status.
     ///
     /// Path resolution is cached via `OnceLock` (first call only).
@@ -131,14 +140,15 @@ impl ClaudeCliStatus {
     /// 2. `which claude` — server's inherited PATH
     /// 3. Filesystem scan of known install locations
     fn find_claude_path() -> Option<String> {
-        // Step 1: Login shell resolution (the fix-path pattern from VS Code/Electron)
+        // Step 1: Login shell resolution (Unix only; Windows has no $SHELL).
+        #[cfg(unix)]
         if let Ok(shell) = std::env::var("SHELL") {
             if let Some(path) = Self::which_via_shell(&shell) {
                 return Some(path);
             }
         }
 
-        // Step 2: Direct `which` using server's inherited PATH
+        // Step 2: Direct `which`/`where` using server's inherited PATH
         if let Some(path) = Self::which_direct() {
             return Some(path);
         }
@@ -148,6 +158,7 @@ impl ClaudeCliStatus {
     }
 
     /// Resolve `claude` via the user's login shell.
+    #[cfg(unix)]
     fn which_via_shell(shell: &str) -> Option<String> {
         let output = Self::run_with_timeout(Command::new(shell).args(["-lc", "which claude"]))?;
         if output.status.success() {
@@ -161,7 +172,11 @@ impl ClaudeCliStatus {
 
     /// Resolve `claude` via the server's inherited PATH.
     fn which_direct() -> Option<String> {
-        let output = Self::run_with_timeout(Command::new("which").arg("claude"))?;
+        #[cfg(windows)]
+        let probe = "where";
+        #[cfg(not(windows))]
+        let probe = "which";
+        let output = Self::run_with_timeout(Command::new(probe).arg("claude"))?;
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {
@@ -173,17 +188,33 @@ impl ClaudeCliStatus {
 
     /// Scan known installation locations on the filesystem.
     fn scan_known_paths() -> Option<String> {
-        let home = std::env::var("HOME").ok().unwrap_or_default();
-        Self::KNOWN_CLI_PATHS
-            .iter()
-            .map(|p| {
-                if p.starts_with('/') {
-                    p.to_string()
-                } else {
-                    format!("{home}/{p}")
+        #[cfg(windows)]
+        {
+            if let Some(home) = crate::process::home_dir() {
+                for rel in Self::KNOWN_CLI_PATHS_WINDOWS {
+                    let p = home.join(rel);
+                    if p.exists() {
+                        return Some(p.to_string_lossy().to_string());
+                    }
                 }
-            })
-            .find(|p| std::path::Path::new(p).exists())
+            }
+            // Also check PATH-adjacent claude.cmd via where.exe fallback already done.
+            return None;
+        }
+        #[cfg(not(windows))]
+        {
+            let home = std::env::var("HOME").ok().unwrap_or_default();
+            Self::KNOWN_CLI_PATHS
+                .iter()
+                .map(|p| {
+                    if p.starts_with('/') {
+                        p.to_string()
+                    } else {
+                        format!("{home}/{p}")
+                    }
+                })
+                .find(|p| std::path::Path::new(p).exists())
+        }
     }
 
     /// Get the claude CLI version.
@@ -228,10 +259,10 @@ impl ClaudeCliStatus {
     /// when the server runs inside a Claude Code session (the subprocess is
     /// killed before it can produce any output).
     fn check_auth_from_credentials() -> (bool, Option<String>) {
-        let home = match std::env::var("HOME") {
-            Ok(h) => h,
-            Err(_) => {
-                tracing::warn!("CLI auth: HOME not set, cannot read credentials");
+        let home = match crate::process::home_dir() {
+            Some(h) => h.to_string_lossy().to_string(),
+            None => {
+                tracing::warn!("CLI auth: no home directory, cannot read credentials");
                 return (false, None);
             }
         };

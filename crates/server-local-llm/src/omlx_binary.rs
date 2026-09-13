@@ -2,7 +2,11 @@ use std::process::Command;
 
 /// Check if `omlx` is available on PATH (for UX guidance, not for spawning).
 pub fn is_installed() -> bool {
-    Command::new("which")
+    #[cfg(windows)]
+    let probe = "where";
+    #[cfg(not(windows))]
+    let probe = "which";
+    Command::new(probe)
         .arg("omlx")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

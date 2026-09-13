@@ -8,41 +8,45 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Filename of the install-source marker written by `install.sh` next to
-/// the binary tree (see `install.sh`: `${INSTALL_DIR}/install-source`).
+/// Filename of the install-source marker written by `install.sh` /
+/// `install.ps1` next to the binary tree (see `install.sh`:
+/// `${INSTALL_DIR}/install-source`). The file *content* names the
+/// installer (`install_sh` or `install_ps1`); presence alone means a
+/// script install as opposed to npx/plugin.
 const INSTALL_SOURCE_MARKER: &str = "install-source";
 
 /// Detect how the server was installed/launched.
 ///
-/// Returns one of: "plugin", "install_sh", "npx".
+/// Returns one of: "plugin", "install_sh", "install_ps1", "npx".
 ///
 /// Precedence is by *current launch*, then *install origin*:
-/// 1. `plugin`     — Claude Code sets `CLAUDE_PLUGIN_ROOT` when it spawns us.
-/// 2. `install_sh` — `install.sh` left its marker beside the binary.
-/// 3. `npx`        — neither signal: ran from npm's transient cache.
+/// 1. `plugin`      — Claude Code sets `CLAUDE_PLUGIN_ROOT` when it spawns us.
+/// 2. `install_sh`  — `install.sh` left its marker beside the binary.
+/// 3. `install_ps1` — `install.ps1` left its marker beside the binary.
+/// 4. `npx`         — neither signal: ran from npm's transient cache.
 pub fn detect_install_source() -> &'static str {
     if std::env::var("CLAUDE_PLUGIN_ROOT").is_ok() {
         return "plugin";
     }
-    if install_sh_marker_present() {
-        return "install_sh";
+    match read_install_marker() {
+        Some(content) if content.trim() == "install_ps1" => "install_ps1",
+        Some(_) => "install_sh",
+        None => "npx",
     }
-    "npx"
 }
 
-/// True when the `install.sh` marker sits beside the running binary.
+/// Read the install-source marker beside the running binary, if present.
 ///
 /// The binary lives at `${INSTALL_DIR}/bin/claude-view`; the marker at
 /// `${INSTALL_DIR}/install-source`. Resolving the marker *relative to the
 /// executable* makes the install.sh↔server contract explicit and
 /// drift-proof — it holds regardless of `CLAUDE_VIEW_INSTALL_DIR`, unlike
 /// the previous brittle substring match on the install path.
-fn install_sh_marker_present() -> bool {
-    std::env::current_exe()
+fn read_install_marker() -> Option<String> {
+    let marker = std::env::current_exe()
         .ok()
-        .and_then(|exe| marker_path_for_exe(&exe))
-        .map(|m| m.is_file())
-        .unwrap_or(false)
+        .and_then(|exe| marker_path_for_exe(&exe))?;
+    std::fs::read_to_string(marker).ok()
 }
 
 /// Pure path arithmetic: `${INSTALL_DIR}/bin/claude-view` →

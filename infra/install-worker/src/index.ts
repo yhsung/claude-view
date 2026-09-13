@@ -6,7 +6,8 @@
  *
  * Routes:
  *   GET /install.sh      → proxy install script from GitHub (cached 5 min at edge)
- *   GET /ping?source=X   → install source beacon (plugin, npx, install_sh)
+ *   GET /install.ps1     → proxy Windows install script from GitHub (cached 5 min)
+ *   GET /ping?source=X   → install source beacon (plugin, npx, install_sh, install_ps1)
  *   GET /                 → redirect to repo
  */
 
@@ -16,7 +17,7 @@ interface Env {
 
 const CACHE_TTL_SECONDS = 300 // 5 minutes — fresh enough for updates, light on GitHub
 
-const VALID_SOURCES = new Set(['plugin', 'npx', 'install_sh'])
+const VALID_SOURCES = new Set(['plugin', 'npx', 'install_sh', 'install_ps1'])
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -27,7 +28,11 @@ export default {
     }
 
     if (url.pathname === '/install.sh') {
-      return handleInstallScript(request, env)
+      return handleInstallScript(request, env, 'install.sh', 'text/plain; charset=utf-8')
+    }
+
+    if (url.pathname === '/install.ps1') {
+      return handleInstallScript(request, env, 'install.ps1', 'text/plain; charset=utf-8')
     }
 
     if (url.pathname === '/ping') {
@@ -65,7 +70,12 @@ function handlePing(url: URL): Response {
   })
 }
 
-async function handleInstallScript(request: Request, env: Env): Promise<Response> {
+async function handleInstallScript(
+  request: Request,
+  env: Env,
+  filename: string,
+  contentType: string,
+): Promise<Response> {
   // Check CF edge cache first
   const cache = caches.default
   const cacheKey = new Request(request.url, request)
@@ -73,7 +83,7 @@ async function handleInstallScript(request: Request, env: Env): Promise<Response
   if (cached) return cached
 
   // Fetch from GitHub
-  const githubUrl = `${env.GITHUB_RAW_BASE}/install.sh`
+  const githubUrl = `${env.GITHUB_RAW_BASE}/${filename}`
   const upstream = await fetch(githubUrl, {
     headers: { 'User-Agent': 'claude-view-install-worker' },
   })
@@ -87,7 +97,7 @@ async function handleInstallScript(request: Request, env: Env): Promise<Response
   const script = await upstream.text()
   const response = new Response(script, {
     headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Type': contentType,
       'Cache-Control': `public, max-age=${CACHE_TTL_SECONDS}`,
       'X-Content-Type-Options': 'nosniff',
     },

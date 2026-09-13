@@ -143,16 +143,14 @@ pub async fn cleanup_processes(
         for target in &targets {
             match validate_pid_in_system(&sys, target.pid, target.start_time, own_pid) {
                 Ok(()) => {
-                    let signal = libc::SIGTERM;
-                    let result = unsafe { libc::kill(target.pid as i32, signal) };
-                    if result == 0 {
-                        killed.push(target.pid);
-                    } else {
-                        let errno = std::io::Error::last_os_error();
-                        failed.push(KillFailure {
-                            pid: target.pid,
-                            reason: format!("SIGTERM failed: {errno}"),
-                        });
+                    match claude_view_core::process::terminate_pid(target.pid, false) {
+                        Ok(()) => killed.push(target.pid),
+                        Err(errno) => {
+                            failed.push(KillFailure {
+                                pid: target.pid,
+                                reason: format!("terminate failed: {errno}"),
+                            });
+                        }
                     }
                 }
                 Err(reason) => {
@@ -193,17 +191,8 @@ fn validate_and_kill(pid: u32, start_time: i64, force: bool) -> Result<(), Strin
 
     validate_pid_in_system(&sys, pid, start_time, own_pid)?;
 
-    let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
-    let result = unsafe { libc::kill(pid as i32, signal) };
-    if result == 0 {
-        Ok(())
-    } else {
-        let errno = std::io::Error::last_os_error();
-        Err(format!(
-            "{} failed: {errno}",
-            if force { "SIGKILL" } else { "SIGTERM" }
-        ))
-    }
+    claude_view_core::process::terminate_pid(pid, force)
+        .map_err(|errno| format!("{} failed: {errno}", if force { "kill" } else { "terminate" }))
 }
 
 /// Validate that a PID is safe to kill: exists, start_time matches, not self.

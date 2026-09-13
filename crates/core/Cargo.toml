@@ -24,8 +24,12 @@ serde_yaml = "0.9"
 toml = "0.8"
 walkdir = { workspace = true }
 flate2 = { workspace = true }
+sysinfo = { workspace = true }
 claude-view-types = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 # Gate ts-rs file generation behind this feature so `cargo test` alone

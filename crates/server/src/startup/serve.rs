@@ -1,7 +1,7 @@
 //! `axum::serve(...)` with graceful shutdown for hook cleanup.
 //!
-//! Extracted from `main.rs` in CQRS Phase 7.f. Signal handling (SIGINT +
-//! SIGTERM), SSE shutdown broadcast, port-file removal, hook cleanup,
+//! Extracted from `main.rs` in CQRS Phase 7.f. Signal handling (Ctrl+C +
+//! SIGTERM on Unix), SSE shutdown broadcast, port-file removal, hook cleanup,
 //! local-LLM/sidecar shutdown, and the 2-second grace window are all
 //! unchanged from the pre-split runtime.
 
@@ -15,7 +15,10 @@ use tokio::sync::watch;
 use crate::local_llm::LocalLlmService;
 use crate::SidecarManager;
 
-/// Serve the axum router with graceful shutdown on SIGINT / SIGTERM.
+/// Serve the axum router with graceful shutdown.
+///
+/// - Unix: Ctrl+C + SIGTERM (kill, Docker, systemd).
+/// - Windows: Ctrl+C / Ctrl+Break via Tokio's `ctrl_c` (no SIGTERM).
 ///
 /// On shutdown:
 /// 1. Broadcast `true` on `shutdown_tx` so SSE streams break their `select!`
@@ -37,16 +40,19 @@ pub async fn run(
     let shutdown_port = port;
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            // Listen for both SIGINT (Ctrl+C) and SIGTERM (kill, Docker, systemd).
-            // Without SIGTERM handling, `kill <pid>` bypasses all cleanup.
+            #[cfg(unix)]
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .expect("register SIGTERM handler");
 
+            #[cfg(unix)]
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = sigterm.recv() => {}
             }
+            #[cfg(not(unix))]
+            let _ = tokio::signal::ctrl_c().await;
+
             eprintln!("\n  Shutting down...");
 
             // Signal all SSE streams to terminate (breaks their select! loops).
@@ -70,12 +76,16 @@ pub async fn run(
             sidecar.shutdown();
 
             // Give SSE streams a moment to see the shutdown signal and break.
-            // Second signal (Ctrl+C or another SIGTERM) skips the wait for
-            // impatient users. `sigterm.recv()` is re-armable and cancel-safe —
-            // safe to reuse in a second `select!`.
+            // A second Ctrl+C (or SIGTERM on Unix) skips the wait.
+            #[cfg(unix)]
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = sigterm.recv() => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+            }
+            #[cfg(not(unix))]
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
                 _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
             }
         })

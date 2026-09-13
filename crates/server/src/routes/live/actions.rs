@@ -38,14 +38,11 @@ pub async fn kill_session(
 
     match session_info {
         Some(Some(pid)) => {
-            let pid_i32 = pid as i32; // safe: macOS PIDs max ~99999, Linux ~4M
-            let result = unsafe { libc::kill(pid_i32, libc::SIGTERM) };
-            if result != 0 {
-                let errno = std::io::Error::last_os_error();
-                tracing::warn!(session_id = %session_id, pid, %errno, "Failed to send SIGTERM");
+            if let Err(errno) = claude_view_core::process::terminate_pid(pid, false) {
+                tracing::warn!(session_id = %session_id, pid, %errno, "Failed to terminate session process");
                 return (
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("SIGTERM failed: {}", errno), "pid": pid })),
+                    Json(serde_json::json!({ "error": format!("terminate failed: {}", errno), "pid": pid })),
                 )
                     .into_response();
             }

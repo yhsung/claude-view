@@ -35,6 +35,7 @@ pub mod phase;
 pub mod pipeline_checks;
 pub mod plan_files;
 pub mod pricing;
+pub mod process;
 pub mod progress;
 pub mod prompt_history;
 pub mod prompt_templates;

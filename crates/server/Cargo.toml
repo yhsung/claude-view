@@ -95,6 +95,7 @@ rustls = { workspace = true }
 clap = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 nix = { version = "0.29", features = ["signal"] }
 crypto_box = "0.9"

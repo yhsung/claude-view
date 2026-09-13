@@ -83,11 +83,24 @@ function extractZip(buffer, destDir) {
   fs.writeFileSync(tmpFile, buffer)
   try {
     if (process.platform === 'win32') {
-      execFileSync(
-        'powershell',
-        ['-Command', `Expand-Archive -Force -Path '${tmpFile}' -DestinationPath '${destDir}'`],
-        { stdio: 'pipe' },
-      )
+      try {
+        // tar ships with Windows 10+ and handles paths with spaces safely
+        // (argv-based, no shell quoting issues).
+        execFileSync('tar', ['-xf', tmpFile, '-C', destDir], { stdio: 'pipe' })
+      } catch {
+        // Fallback: PowerShell Expand-Archive with safely-quoted paths.
+        const quotedTmp = `'${tmpFile.replace(/'/g, "''")}'`
+        const quotedDest = `'${destDir.replace(/'/g, "''")}'`
+        execFileSync(
+          'powershell',
+          [
+            '-NoProfile',
+            '-Command',
+            `Expand-Archive -Force -Path ${quotedTmp} -DestinationPath ${quotedDest}`,
+          ],
+          { stdio: 'pipe' },
+        )
+      }
     } else {
       execFileSync('unzip', ['-o', tmpFile, '-d', destDir], { stdio: 'pipe' })
     }
@@ -259,7 +272,12 @@ async function main() {
 
       if (signal) {
         // Re-signal ourselves so the parent shell sees 128 + signal number.
-        process.kill(process.pid, signal)
+        // Windows cannot re-signal (except SIGINT); exit with the code instead.
+        if (process.platform === 'win32') {
+          process.exit(code ?? 1)
+        } else {
+          process.kill(process.pid, signal)
+        }
       } else {
         process.exit(code ?? 1)
       }
@@ -267,7 +285,11 @@ async function main() {
   })
 
   // Forward deliberate-stop signals to whichever child is currently running.
-  for (const sig of ['SIGTERM', 'SIGHUP']) {
+  // Windows only reliably delivers SIGINT (Ctrl+C); SIGTERM/SIGHUP never
+  // fire on win32, so guard registration to avoid dead handlers and only
+  // re-signal when the platform supports it.
+  const forwardSignals = process.platform === 'win32' ? [] : ['SIGTERM', 'SIGHUP']
+  for (const sig of forwardSignals) {
     process.on(sig, () => {
       const child = supervisor.getChild()
       if (child) child.kill(sig)

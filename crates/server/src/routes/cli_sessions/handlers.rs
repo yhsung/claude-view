@@ -391,12 +391,12 @@ pub async fn kill_session(
         );
     }
 
-    // Check state + SIGTERM the Claude process directly.
+    // Check state + terminate the Claude process directly.
     if let Some(pid) = resolved_pid {
-        let pid_json_exists = dirs::home_dir()
+        let pid_json_exists = claude_view_core::process::home_dir()
             .map(|h| h.join(format!(".claude/sessions/{pid}.json")).exists())
             .unwrap_or(false);
-        let process_alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+        let process_alive = claude_view_core::process::is_pid_alive(pid);
         tracing::debug!(
             tmux_session = %id,
             pane_pid = pid,
@@ -405,11 +405,11 @@ pub async fn kill_session(
             "cli.kill.state_snapshot"
         );
 
-        // SIGTERM the Claude CLI process directly — tmux kill only sends SIGHUP
+        // Terminate the Claude CLI process directly — tmux kill only sends SIGHUP
         // which Claude CLI ignores (keeps running its 30s timer).
+        // On Windows this maps to TerminateProcess (no POSIX signals).
         if process_alive {
-            let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-            let delivered = result == 0;
+            let delivered = claude_view_core::process::terminate_pid(pid, false).is_ok();
             tracing::debug!(
                 tmux_session = %id,
                 pane_pid = pid,

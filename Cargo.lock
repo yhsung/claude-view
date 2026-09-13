@@ -723,6 +723,7 @@ dependencies = [
  "claude-view-types",
  "dirs",
  "flate2",
+ "libc",
  "memchr",
  "pretty_assertions",
  "regex-lite",
@@ -731,6 +732,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "similar",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1042,9 +1044,11 @@ dependencies = [
 name = "claude-view-server-sidecar"
 version = "0.45.0"
 dependencies = [
+ "claude-view-core",
  "libc",
  "reqwest",
  "serde_json",
+ "sysinfo",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

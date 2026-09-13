@@ -38,7 +38,7 @@ detect_platform() {
   case "$os" in
     darwin) os="darwin" ;;
     linux)  os="linux" ;;
-    *)      error "Unsupported OS: $os. Only macOS and Linux are supported." ;;
+    *)      error "Unsupported OS: $os. Only macOS and Linux are supported by install.sh. On Windows, run in PowerShell: irm https://get.claudeview.ai/install.ps1 | iex" ;;
   esac
 
   case "$arch" in

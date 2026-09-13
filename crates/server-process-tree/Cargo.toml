@@ -9,9 +9,11 @@ codegen = []
 
 [dependencies]
 chrono = { workspace = true }
-libc = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
 ts-rs = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

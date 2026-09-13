@@ -19,8 +19,8 @@ pub fn data_dir() -> PathBuf {
             path
         }
     } else {
-        dirs::home_dir()
-            .expect("no home directory found")
+        crate::process::home_dir()
+            .unwrap_or_else(std::env::temp_dir)
             .join(".claude-view")
     }
 }
@@ -49,8 +49,8 @@ pub fn config_dir() -> PathBuf {
     if std::env::var("CLAUDE_VIEW_DATA_DIR").is_ok() {
         data_dir()
     } else {
-        dirs::home_dir()
-            .expect("no home directory found")
+        crate::process::home_dir()
+            .unwrap_or_else(std::env::temp_dir)
             .join(".claude-view")
     }
 }
