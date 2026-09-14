@@ -98,8 +98,8 @@ export function TelemetrySection({
             </p>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               {isEnabled
-                ? 'On by default in official builds — anonymous, content-free, guides what gets built. Toggle off anytime.'
-                : "Off — you've opted out. No usage data is sent."}
+                ? 'On — you opted in. Anonymous, content-free, guides what gets built. Toggle off anytime.'
+                : 'Off by default — opt in to share anonymous, content-free usage counts.'}
             </p>
           </div>
         </div>

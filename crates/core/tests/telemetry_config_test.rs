@@ -150,20 +150,21 @@ fn env_var_override_disables() {
 
 #[test]
 #[serial]
-fn env_var_value_1_does_not_disable() {
+fn env_var_value_1_opts_in() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("telemetry.json");
     let config = TelemetryConfig {
-        enabled: Some(true),
+        enabled: Some(false),
         ..TelemetryConfig::new_undecided()
     };
     write_telemetry_config(&path, &config).unwrap();
     std::env::set_var("CLAUDE_VIEW_TELEMETRY", "1");
+    std::env::remove_var("CI");
     let status = resolve_telemetry_status(Some("phc_test"), &path);
     assert_eq!(
         status,
         TelemetryStatus::Enabled,
-        "CLAUDE_VIEW_TELEMETRY=1 must NOT disable telemetry — only '0' disables"
+        "CLAUDE_VIEW_TELEMETRY=1 must opt in to telemetry (default-off)"
     );
     std::env::remove_var("CLAUDE_VIEW_TELEMETRY");
 }
@@ -185,6 +186,7 @@ fn ci_env_var_disables() {
 }
 
 #[test]
+#[serial]
 fn file_enabled_true_means_enabled() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("telemetry.json");
@@ -193,32 +195,6 @@ fn file_enabled_true_means_enabled() {
         ..TelemetryConfig::new_undecided()
     };
     write_telemetry_config(&path, &config).unwrap();
-    let status = resolve_telemetry_status(Some("phc_test"), &path);
-    assert_eq!(status, TelemetryStatus::Enabled);
-}
-
-#[test]
-fn file_enabled_false_means_disabled() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("telemetry.json");
-    let config = TelemetryConfig {
-        enabled: Some(false),
-        ..TelemetryConfig::new_undecided()
-    };
-    write_telemetry_config(&path, &config).unwrap();
-    let status = resolve_telemetry_status(Some("phc_test"), &path);
-    assert_eq!(status, TelemetryStatus::Disabled);
-}
-
-#[test]
-#[serial]
-fn file_missing_means_enabled_default_on() {
-    // Default-on: a fresh OFFICIAL install (compile-time key present) with
-    // no consent file yet is ENABLED, not Undecided. This is the behaviour
-    // change — pre-default-on this asserted Undecided (silent/off).
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("telemetry.json");
-    // Guard against a CI/env-killed host running the suite.
     std::env::remove_var("CLAUDE_VIEW_TELEMETRY");
     std::env::remove_var("CI");
     let status = resolve_telemetry_status(Some("phc_test"), &path);
@@ -227,7 +203,37 @@ fn file_missing_means_enabled_default_on() {
 
 #[test]
 #[serial]
-fn file_enabled_null_means_enabled_default_on() {
+fn file_enabled_false_means_disabled() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("telemetry.json");
+    let config = TelemetryConfig {
+        enabled: Some(false),
+        ..TelemetryConfig::new_undecided()
+    };
+    write_telemetry_config(&path, &config).unwrap();
+    std::env::remove_var("CLAUDE_VIEW_TELEMETRY");
+    std::env::remove_var("CI");
+    let status = resolve_telemetry_status(Some("phc_test"), &path);
+    assert_eq!(status, TelemetryStatus::Disabled);
+}
+
+#[test]
+#[serial]
+fn file_missing_means_disabled_default_off() {
+    // Default-off: a fresh OFFICIAL install (compile-time key present) with
+    // no consent file yet is DISABLED until the user explicitly opts in.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("telemetry.json");
+    // Guard against a CI/env-killed host running the suite.
+    std::env::remove_var("CLAUDE_VIEW_TELEMETRY");
+    std::env::remove_var("CI");
+    let status = resolve_telemetry_status(Some("phc_test"), &path);
+    assert_eq!(status, TelemetryStatus::Disabled);
+}
+
+#[test]
+#[serial]
+fn file_enabled_null_means_disabled_default_off() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("telemetry.json");
     let config = TelemetryConfig::new_undecided(); // enabled: None
@@ -237,9 +243,22 @@ fn file_enabled_null_means_enabled_default_on() {
     let status = resolve_telemetry_status(Some("phc_test"), &path);
     assert_eq!(
         status,
-        TelemetryStatus::Enabled,
-        "enabled:null on an official build → ON by default"
+        TelemetryStatus::Disabled,
+        "enabled:null on an official build → OFF by default (opt-in)"
     );
+}
+
+#[test]
+#[serial]
+fn env_opt_in_enables_fresh_install() {
+    // CLAUDE_VIEW_TELEMETRY=1 opts a fresh install in without a consent file.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("telemetry.json");
+    std::env::set_var("CLAUDE_VIEW_TELEMETRY", "1");
+    std::env::remove_var("CI");
+    let status = resolve_telemetry_status(Some("phc_test"), &path);
+    std::env::remove_var("CLAUDE_VIEW_TELEMETRY");
+    assert_eq!(status, TelemetryStatus::Enabled);
 }
 
 // === Milestone dedup tests ===
@@ -275,7 +294,7 @@ fn milestone_jumps_multiple() {
 
 #[test]
 #[serial]
-fn init_flow_creates_config_then_resolves_enabled_default_on() {
+fn init_flow_creates_config_then_resolves_disabled_default_off() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("telemetry.json");
     claude_view_core::telemetry_config::create_telemetry_config_if_missing(&path).unwrap();
@@ -285,12 +304,12 @@ fn init_flow_creates_config_then_resolves_enabled_default_on() {
     // user has made no explicit choice...
     assert!(config.enabled.is_none());
     assert!(!config.anonymous_id.is_empty());
-    // ...but on an official build that now RESOLVES to Enabled (default-on),
-    // not Undecided. The persisted None lets an explicit opt-out still win.
+    // ...and on an official build that now RESOLVES to Disabled (default-off)
+    // until the user explicitly opts in.
     std::env::remove_var("CLAUDE_VIEW_TELEMETRY");
     std::env::remove_var("CI");
     let status = resolve_telemetry_status(Some("phc_test"), &path);
-    assert_eq!(status, TelemetryStatus::Enabled);
+    assert_eq!(status, TelemetryStatus::Disabled);
 }
 
 #[test]
@@ -373,10 +392,10 @@ fn first_index_completed_dedup_works_below_milestone_threshold() {
     );
 }
 
-// === Default-on state table (pure resolver, dependency-injected) ===
+// === Default-off state table (pure resolver, dependency-injected) ===
 //
-// `resolve_status_pure(api_key, consent, kill_switch, is_ci)` is the pure
-// core of `resolve_telemetry_status`. Testing it directly avoids env-var
+// `resolve_status_pure(api_key, consent, kill_switch, is_ci, opt_in)` is the
+// pure core of `resolve_telemetry_status`. Testing it directly avoids env-var
 // races under parallel test execution and pins every row of the table.
 
 use claude_view_core::telemetry_config::resolve_status_pure;
@@ -385,51 +404,74 @@ use claude_view_core::telemetry_config::resolve_status_pure;
 fn source_build_no_key_is_disabled() {
     // Built from source = no compile-time key = telemetry impossible.
     assert_eq!(
-        resolve_status_pure(None, None, false, false),
+        resolve_status_pure(None, None, false, false, false),
         TelemetryStatus::Disabled
     );
     assert_eq!(
-        resolve_status_pure(Some(""), Some(true), false, false),
+        resolve_status_pure(Some(""), Some(true), false, false, true),
         TelemetryStatus::Disabled,
-        "empty key counts as no key even if consent says true"
+        "empty key counts as no key even if consent/opt-in say true"
     );
 }
 
 #[test]
-fn fresh_official_install_defaults_to_enabled() {
+fn fresh_official_install_defaults_to_disabled() {
     // THE change: official build (key present), no explicit choice yet,
-    // not CI, not env-killed → ON by default (was Undecided/silent).
+    // not CI, not env-killed, no env opt-in → OFF by default (was Enabled).
     assert_eq!(
-        resolve_status_pure(Some("phc_key"), None, false, false),
+        resolve_status_pure(Some("phc_key"), None, false, false, false),
+        TelemetryStatus::Disabled
+    );
+}
+
+#[test]
+fn env_opt_in_enables() {
+    assert_eq!(
+        resolve_status_pure(Some("phc_key"), None, false, false, true),
         TelemetryStatus::Enabled
     );
+    assert_eq!(
+        resolve_status_pure(Some("phc_key"), Some(false), false, false, true),
+        TelemetryStatus::Enabled,
+        "explicit env opt-in beats a file opt-out, mirroring kill-switch precedence"
+    );
 }
 
 #[test]
-fn kill_switch_overrides_default_on() {
+fn kill_switch_overrides_opt_in() {
     assert_eq!(
-        resolve_status_pure(Some("phc_key"), None, true, false),
+        resolve_status_pure(Some("phc_key"), None, true, false, false),
         TelemetryStatus::Disabled
     );
     assert_eq!(
-        resolve_status_pure(Some("phc_key"), Some(true), true, false),
+        resolve_status_pure(Some("phc_key"), Some(true), true, false, false),
         TelemetryStatus::Disabled,
         "kill switch beats an explicit opt-in too"
+    );
+    assert_eq!(
+        resolve_status_pure(Some("phc_key"), None, true, false, true),
+        TelemetryStatus::Disabled,
+        "kill switch beats env opt-in"
     );
 }
 
 #[test]
 fn ci_is_disabled_even_with_key() {
     assert_eq!(
-        resolve_status_pure(Some("phc_key"), None, false, true),
+        resolve_status_pure(Some("phc_key"), None, false, true, false),
         TelemetryStatus::Disabled
+    );
+    assert_eq!(
+        resolve_status_pure(Some("phc_key"), Some(true), false, true, true),
+        TelemetryStatus::Disabled,
+        "CI beats every opt-in"
     );
 }
 
 #[test]
 fn explicit_opt_out_respected_forever() {
     assert_eq!(
-        resolve_status_pure(Some("phc_key"), Some(false), false, false),
+        resolve_status_pure(Some("phc_key"), Some(false), false, false, false),
         TelemetryStatus::Disabled
     );
 }
@@ -437,26 +479,28 @@ fn explicit_opt_out_respected_forever() {
 #[test]
 fn explicit_opt_in_is_enabled() {
     assert_eq!(
-        resolve_status_pure(Some("phc_key"), Some(true), false, false),
+        resolve_status_pure(Some("phc_key"), Some(true), false, false, false),
         TelemetryStatus::Enabled
     );
 }
 
 #[test]
 fn pure_resolver_never_returns_undecided() {
-    // Default-on collapses the tri-state: official builds are Enabled or
+    // Default-off collapses the tri-state: official builds are Enabled or
     // Disabled, never Undecided. (Undecided stays in the enum for API
     // back-compat but is unreachable from resolution.)
     for consent in [None, Some(true), Some(false)] {
         for kill in [true, false] {
             for ci in [true, false] {
-                for key in [None, Some(""), Some("phc_key")] {
-                    let s = resolve_status_pure(key, consent, kill, ci);
-                    assert_ne!(
-                        s,
-                        TelemetryStatus::Undecided,
-                        "key={key:?} consent={consent:?} kill={kill} ci={ci}"
-                    );
+                for opt_in in [true, false] {
+                    for key in [None, Some(""), Some("phc_key")] {
+                        let s = resolve_status_pure(key, consent, kill, ci, opt_in);
+                        assert_ne!(
+                            s,
+                            TelemetryStatus::Undecided,
+                            "key={key:?} consent={consent:?} kill={kill} ci={ci} opt_in={opt_in}"
+                        );
+                    }
                 }
             }
         }

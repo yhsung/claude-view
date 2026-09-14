@@ -135,9 +135,9 @@ pub fn fire_startup_events(telemetry: Option<&TelemetryClient>, telemetry_config
             }),
         );
         if plan.fire_installed {
-            // One-shot acquisition signal. Under default-on the first
-            // server start is the moment this install becomes countable
-            // (pre-default-on this fired on consent instead).
+            // One-shot acquisition signal. Under opt-in (default-off) this
+            // fires on the first server start after the user opts in —
+            // the moment this install becomes countable.
             client.track(
                 "installed",
                 serde_json::json!({

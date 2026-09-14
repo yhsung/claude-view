@@ -25,8 +25,8 @@ pub struct TelemetryConfig {
     #[serde(default)]
     pub install_reported: bool,
     /// ISO-8601 timestamp the one-time terminal privacy notice was shown.
-    /// `None` = not shown yet (print once on a default-on official build,
-    /// then stamp so it never repeats).
+    /// `None` = not shown yet (print once on an explicit opt-in, then
+    /// stamp so it never repeats).
     #[serde(default)]
     pub notice_shown_at: Option<String>,
     /// UTC date (`YYYY-MM-DD`) of the last `app_active` heartbeat. Dedupes
@@ -112,17 +112,19 @@ pub fn create_telemetry_config_if_missing(path: &Path) -> std::io::Result<()> {
 /// that gathers env + the consent file and delegates here; testing this
 /// directly pins every row of the table without env-var races.
 ///
-/// **Default-on:** an *official* build (compile-time `POSTHOG_API_KEY`
-/// present) with no explicit user choice resolves to `Enabled`. Source
-/// builds (no key) and the CI / `CLAUDE_VIEW_TELEMETRY=0` kill-switch
-/// resolve to `Disabled`. An explicit `Some(false)` opt-out is honored
-/// permanently and outranks the default. The kill-switch / CI / no-key
-/// gates outrank an explicit opt-in.
+/// **Default-off:** an *official* build (compile-time `POSTHOG_API_KEY`
+/// present) with no explicit user choice resolves to `Disabled` — telemetry
+/// only runs after an explicit opt-in (`Some(true)` via Settings or
+/// `CLAUDE_VIEW_TELEMETRY=1`). Source builds (no key), CI, and the
+/// `CLAUDE_VIEW_TELEMETRY=0` kill-switch resolve to `Disabled`. An explicit
+/// `Some(false)` opt-out is honored permanently. The kill-switch / CI /
+/// no-key gates outrank any opt-in (file or env).
 pub fn resolve_status_pure(
     api_key: Option<&str>,
     consent: Option<bool>,
     kill_switch: bool,
     is_ci: bool,
+    opt_in: bool,
 ) -> TelemetryStatus {
     match api_key {
         Some(k) if !k.is_empty() => {}
@@ -132,16 +134,21 @@ pub fn resolve_status_pure(
     if kill_switch || is_ci {
         return TelemetryStatus::Disabled;
     }
+    if opt_in {
+        return TelemetryStatus::Enabled;
+    }
     match consent {
         Some(false) => TelemetryStatus::Disabled,
         Some(true) => TelemetryStatus::Enabled,
-        // No explicit choice on an official build → ON by default.
-        None => TelemetryStatus::Enabled,
+        // No explicit choice on an official build → OFF by default (opt-in).
+        None => TelemetryStatus::Disabled,
     }
 }
 
 pub fn resolve_telemetry_status(api_key: Option<&str>, config_path: &Path) -> TelemetryStatus {
-    let kill_switch = std::env::var("CLAUDE_VIEW_TELEMETRY").ok().as_deref() == Some("0");
+    let env_val = std::env::var("CLAUDE_VIEW_TELEMETRY").ok();
+    let kill_switch = env_val.as_deref() == Some("0");
+    let opt_in = env_val.as_deref() == Some("1");
     let is_ci = std::env::var("CI").ok().as_deref() == Some("true");
     // Skip the consent-file read entirely on source builds (no key) — keeps
     // resolution allocation/IO-free in the dominant self-host path.
@@ -149,7 +156,7 @@ pub fn resolve_telemetry_status(api_key: Option<&str>, config_path: &Path) -> Te
         Some(k) if !k.is_empty() => read_telemetry_config(config_path).enabled,
         _ => None,
     };
-    resolve_status_pure(api_key, consent, kill_switch, is_ci)
+    resolve_status_pure(api_key, consent, kill_switch, is_ci, opt_in)
 }
 
 const MILESTONES: &[u64] = &[10, 50, 100, 500, 1000, 5000];
